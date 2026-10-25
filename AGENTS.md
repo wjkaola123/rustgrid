@@ -171,9 +171,9 @@ not a later refactor.
 - Release build (`cargo build --release -p rustgrid-app`) needs an HLSL compiler on Windows: on
   this machine the Windows SDK `fxc.exe` is absent, so build the fallback shim once
   (`gcc -O2 -o fxc.exe tools/fxc-shim/fxc.c -lkernel32`). The gitignored `.cargo/config.toml`
-  then points `GPUI_FXC_PATH` at it via `[env]`, so a plain `cargo build --release` just works;
-  `GPUI_FXC_PATH=<abs path to fxc.exe>` on the command line is only needed on a machine whose
-  `.cargo/config.toml` lacks that entry. See Gotchas.
+  no longer carries the `[env] GPUI_FXC_PATH` entry (as of 2026-10-25 it holds only the
+  rsproxy mirror), so a release build needs `GPUI_FXC_PATH=<abs path to fxc.exe>` on the
+  command line — or re-add the entry shown in Gotchas. See Gotchas.
   The shim binary is gitignored; only `tools/fxc-shim/fxc.c` is tracked.
 - `cargo test --workspace`
 - Live MySQL integration test (ignored by default): set `RUSTGRID_MYSQL_PASSWORD` (and
@@ -1022,16 +1022,26 @@ make more engines cheap later — do not build those features early.
 - Stored passwords are encrypted with XChaCha20-Poly1305 (`rustgrid-config/src/secrets.rs`);
   `secrets.json` holds ciphertext keyed by profile `id` and `secret.key` holds the key. The
   profile JSON must stay password-free (a test asserts the plaintext never hits disk).
-- **Windows needs a linker and a C compiler** (sqlx's `ring`). On this machine the MSVC
-  `link.exe` is **not** installed, so always build with the GNU toolchain by prepending
-  `RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu`,
-  `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=gcc`, `CC=gcc` (MinGW-w64 `gcc` is on `PATH`).
-  A plain `cargo build` fails with `linker link.exe not found`. With the GNU toolchain the
+- **Windows needs a linker and a 64-bit C compiler** (sqlx's `ring`, plus rustls 0.23's default
+  aws-lc-rs backend — pulled in by `oracledb`/`sqlx-core`/`self_update` — which compiles a large
+  C corpus in `aws-lc-sys`). On this machine the MSVC `link.exe` is **not** installed and
+  `rust-toolchain.toml`'s `stable` resolves to the MSVC default host, so a plain
+  `cargo build` fails with `linker link.exe not found`. Build with the GNU toolchain **and the
+  project-local 64-bit compiler prepended to `PATH`** (verified 2026-10-25):
+  `RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=gcc
+  CC=gcc CXX=g++ PATH="<repo>/target/verification/toolchains/mingw64/bin:$PATH" cargo build -j 4`.
+  The `PATH` prepend is mandatory: the `gcc` already on `PATH` (`C:\MinGW`, MinGW.org 9.2.0) is
+  **32-bit** and dies inside `aws-lc-sys` with `cc1.exe: sorry, unimplemented: 64-bit mode not
+  compiled in`. The working MinGW-w64 16.2.0 lives in
+  `target/verification/toolchains/mingw64/` (provisioned per
+  `.agents/skills/verify-rustgrid/references/windows-build.md`; its wrapper
+  `.agents/skills/verify-rustgrid/scripts/build.ps1` is the canonical build — same env plus
+  `cargo fmt --all`, logging to `target/verification/build.log`). With the GNU toolchain the
   host *is* the GNU target, so the binary lands at `target/debug/RustGrid.exe` (not under a
-  triple-named subdirectory). The gitignored `.cargo/config.toml` also carries this machine's
-  settings (see "Commands"): `[build] jobs = 4` caps Cargo's parallelism — one job per core (12
-  here) froze the machine — and `[env] GPUI_FXC_PATH` points at the release-build shader shim. A
-  command line `-j N` still overrides the cap.
+  triple-named subdirectory). Pass `-j 4` (or `CARGO_BUILD_JOBS=4`) on the command line: one
+  job per core (12 here) froze the machine, and the gitignored `.cargo/config.toml` currently
+  carries **only** the rsproxy.cn crates.io mirror — no `[build] jobs` cap and no `[env]
+  GPUI_FXC_PATH` (that is why registry paths in build logs read `RSPROX~1.CN-…`).
 - Keep GPUI usage close to the shapes verified in `main.rs` and the `ui/` wrappers.
   `main.rs` opens the window as `gpui_kit::application().with_assets(Assets).run(|cx| { gpui_kit::init(cx); … })`
   and wraps the app view in `Root::new(view, window, cx)` — `Root` must be the window root or
@@ -1111,9 +1121,10 @@ make more engines cheap later — do not build those features early.
   a feature, so `runtime_shaders` does not avoid it. On this machine the Windows SDK `fxc.exe` is
   absent, so a plain `cargo build --release` panics with `Failed to find fxc.exe`. The fallback is
   `tools/fxc-shim` (speaks the fxc subset gpui invokes; drives the system `d3dcompiler_47.dll`) built
-  once with `gcc -O2 -o fxc.exe tools/fxc-shim/fxc.c -lkernel32`. The shim binary is gitignored, and
-  the gitignored `.cargo/config.toml` wires it up automatically (`GPUI_FXC_PATH`, which both build
-  scripts read):
+  once with `gcc -O2 -o fxc.exe tools/fxc-shim/fxc.c -lkernel32`. The shim binary is gitignored.
+  The gitignored `.cargo/config.toml` is meant to wire it up via `[env]` (`GPUI_FXC_PATH`, which
+  both build scripts read) but currently carries only the rsproxy mirror — pass
+  `GPUI_FXC_PATH` on the command line, or re-add the entry, until it does:
   ```toml
   [env]
   GPUI_FXC_PATH = { value = "fxc.exe", relative = true }
